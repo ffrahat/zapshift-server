@@ -1,3 +1,4 @@
 node_modules
 .env
 zap-shipt-2025-firebase-adminsdk.json
+.vercel

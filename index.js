@@ -10,7 +10,13 @@ const crypto = require("crypto");
 // Firebase
 const admin = require("firebase-admin");
 
-const serviceAccount = require("./zap-shipt-2025-firebase-adminsdk.json");
+const decoded = Buffer.from(
+  process.env.FIREBASE_SERVICE_KEY,
+  "base64"
+).toString("utf8");
+const serviceAccount = JSON.parse(decoded);
+
+// const serviceAccount = require("./zap-shipt-2025-firebase-adminsdk.json");
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -28,8 +34,10 @@ function generateTrackingId() {
 app.use(cors());
 app.use(express.json());
 
+
+// verify
 const verifyFBToken = async (req, res, next) => {
-  console.log("in the middleWarre rahat", req.headers);
+  // console.log("in the middleWarre rahat", req.headers);
 
   const token = req.headers.authorization;
   if (!token) {
@@ -45,6 +53,9 @@ const verifyFBToken = async (req, res, next) => {
     return res.status(401).send({ message: "Unauthorize Access" });
   }
 };
+
+
+
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@simplecrud.h04rjld.mongodb.net/?appName=SimpleCrud`;
 
@@ -74,6 +85,26 @@ async function run() {
     const parcelsCollection = db.collection("parcels");
     const paymentsCollection = db.collection("payments");
 
+
+    // Verify Adimn
+// must be use after verifyfbtoken
+const verifyAdmin = async(req, res, next) => {
+
+  const email = req.decoded_email;
+
+  const query = { email };
+
+  const user = await usersCollection.findOne(query);
+
+  if (!user || user.role !== 'admin') {
+    return res.status(403).send({message : 'UnAuthorized Access'})
+  }
+  
+
+  next()
+}
+
+
     // User ralated APis
     app.get("/users", async (req, res) => {
       const cursor = usersCollection.find();
@@ -81,12 +112,12 @@ async function run() {
       res.send(result);
     });
 
-    app.get('/users/:email/role', verifyFBToken, async (req, res) => {
+    app.get("/users/:email/role", verifyFBToken, async (req, res) => {
       const email = req.params.email;
       const query = { email };
       const user = await usersCollection.findOne(query);
-      res.send({role: user?.role || 'user'})
-    })
+      res.send({ role: user?.role || "user" });
+    });
 
     app.post("/users", async (req, res) => {
       const user = req.body;
@@ -102,84 +133,77 @@ async function run() {
       res.send(result);
     });
 
-    app.patch('/users/:id', async (req, res) => {
+    app.patch("/users/:id", async (req, res) => {
       const id = req.params.id;
       const userRole = req.body.role;
       const query = { _id: new ObjectId(id) };
       const updateInfo = {
         $set: {
-          role: userRole
-        }
-      }
+          role: userRole,
+        },
+      };
 
       const result = await usersCollection.updateOne(query, updateInfo);
       res.send(result);
-    })
-
-
-
-
-
-
-
-
+    });
 
     // Rider Related Apis
 
-    app.get('/riders', verifyFBToken, async (req, res) => {
-     
-      const query = {}
+    app.get("/riders", verifyFBToken, async (req, res) => {
+      const query = {};
 
       if (req.query.status) {
         query.status = req.query.status;
       }
       const cursor = ridersCollection.find(query);
       const result = await cursor.toArray();
-      res.send(result)
-    })
+      res.send(result);
+    });
 
-    app.post('/riders', verifyFBToken, async(req, res) => {
+    app.post("/riders", verifyFBToken, async (req, res) => {
       const riderInfo = req.body;
       const email = riderInfo.email;
-      
+
       const query = { email: email };
 
       const existingApplication = await ridersCollection.findOne(query);
       if (existingApplication) {
-        return res.send({message: 'Application Already Done.'})
+        return res.send({ message: "Application Already Done." });
       }
 
-      riderInfo.status = 'pending';
+      riderInfo.status = "pending";
       riderInfo.created_At = new Date();
-      
-      const result = await ridersCollection.insertOne(riderInfo);
-      res.send(result)
-    })
 
-    app.patch('/riders/:id', async (req, res) => {
+      const result = await ridersCollection.insertOne(riderInfo);
+      res.send(result);
+    });
+
+    app.patch("/riders/:id", async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const status = req.body.status;
       const updatedDocs = {
         $set: {
-          status: status
-        }
-      }
+          status: status,
+        },
+      };
 
       const result = await ridersCollection.updateOne(query, updatedDocs);
 
-      if (status === 'approved') {
+      if (status === "approved") {
         const email = req.body.email;
-        const userQuery = { email: email }
+        const userQuery = { email: email };
 
         const updateUser = {
           $set: {
-            role: 'rider'
-          }
-        }
-        const userResult = await usersCollection.updateOne(userQuery, updateUser);
-        
-      } 
+            role: "rider",
+          },
+        };
+        const userResult = await usersCollection.updateOne(
+          userQuery,
+          updateUser
+        );
+      }
 
       // if (status === 'rejected' || status === 'pending') {
       //   const email = req.body.email;
@@ -191,11 +215,11 @@ async function run() {
       //     }
       //   }
       //   const userResult = await usersCollection.updateOne(userQuery, updateUser);
-        
-      // } 
 
-      res.send(result)
-    })
+      // }
+
+      res.send(result);
+    });
 
     //   Parcel Api
     app.get("/parcels", verifyFBToken, async (req, res) => {
@@ -204,7 +228,7 @@ async function run() {
       const decodedEmail = req.decoded_email;
 
       if (email !== decodedEmail) {
-        return res.status(401).send({message: 'UnAuthorize Access'})
+        return res.status(401).send({ message: "UnAuthorize Access" });
       }
 
       if (email) {
@@ -381,6 +405,18 @@ async function run() {
       const result = await cursor.toArray();
       res.send(result);
     });
+
+
+
+     // Payments Related Apis
+    app.get("/all-payments", verifyFBToken, verifyAdmin, async (req, res) => {
+      console.log('in the all payments', req.decoded_email)
+      const cursor = paymentsCollection.find().sort({ paidAt: -1 });
+      const result = await cursor.toArray();
+      res.send(result);
+    });
+
+
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
