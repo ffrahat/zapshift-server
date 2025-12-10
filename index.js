@@ -34,7 +34,6 @@ function generateTrackingId() {
 app.use(cors());
 app.use(express.json());
 
-
 // verify
 const verifyFBToken = async (req, res, next) => {
   // console.log("in the middleWarre rahat", req.headers);
@@ -54,9 +53,6 @@ const verifyFBToken = async (req, res, next) => {
   }
 };
 
-
-
-
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@simplecrud.h04rjld.mongodb.net/?appName=SimpleCrud`;
 
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
@@ -70,9 +66,8 @@ const client = new MongoClient(uri, {
 
 async function run() {
   try {
-    // Connect the client to the server	(optional starting in v4.7)
+   
     await client.connect();
-    // Send a ping to confirm a successful connection
     await client.db("admin").command({ ping: 1 });
     console.log(
       "Pinged your deployment. You successfully connected to MongoDB!"
@@ -85,29 +80,37 @@ async function run() {
     const parcelsCollection = db.collection("parcels");
     const paymentsCollection = db.collection("payments");
 
-
     // Verify Adimn
-// must be use after verifyfbtoken
-const verifyAdmin = async(req, res, next) => {
+    // must be use after verifyfbtoken
+    const verifyAdmin = async (req, res, next) => {
+      const email = req.decoded_email;
 
-  const email = req.decoded_email;
+      const query = { email };
 
-  const query = { email };
+      const user = await usersCollection.findOne(query);
 
-  const user = await usersCollection.findOne(query);
+      if (!user || user.role !== "admin") {
+        return res.status(403).send({ message: "UnAuthorized Access" });
+      }
 
-  if (!user || user.role !== 'admin') {
-    return res.status(403).send({message : 'UnAuthorized Access'})
-  }
-  
-
-  next()
-}
-
+      next();
+    };
 
     // User ralated APis
-    app.get("/users", async (req, res) => {
-      const cursor = usersCollection.find();
+    app.get("/users", verifyFBToken, verifyAdmin, async (req, res) => {
+      const { searchText } = req.query;
+      const query = {};
+
+      if (searchText) {
+        // query.displayName = {$regex : searchText, $options: 'i'};
+
+        query.$or = [
+          { displayName: { $regex: searchText, $options: "i" } },
+          { email: { $regex: searchText, $options: "i" } },
+        ];
+      }
+
+      const cursor = usersCollection.find(query).sort({ created_At: -1 });
       const result = await cursor.toArray();
       res.send(result);
     });
@@ -149,12 +152,21 @@ const verifyAdmin = async(req, res, next) => {
 
     // Rider Related Apis
 
-    app.get("/riders", verifyFBToken, async (req, res) => {
+    app.get("/riders", verifyFBToken, verifyAdmin, async (req, res) => {
       const query = {};
 
       if (req.query.status) {
         query.status = req.query.status;
       }
+      const cursor = ridersCollection.find(query);
+      const result = await cursor.toArray();
+      res.send(result);
+    });
+
+    // FInd Avaiable Rider by district
+    app.get(`/riders/available`, verifyFBToken, async (req, res) => {
+      const { workStatus, district, status } = req.query;
+      const query = { workStatus, district, status };
       const cursor = ridersCollection.find(query);
       const result = await cursor.toArray();
       res.send(result);
@@ -178,7 +190,7 @@ const verifyAdmin = async(req, res, next) => {
       res.send(result);
     });
 
-    app.patch("/riders/:id", async (req, res) => {
+    app.patch("/riders/:id", verifyFBToken, verifyAdmin, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const status = req.body.status;
@@ -188,35 +200,22 @@ const verifyAdmin = async(req, res, next) => {
         },
       };
 
+      // status update 
       const result = await ridersCollection.updateOne(query, updatedDocs);
 
       if (status === "approved") {
         const email = req.body.email;
         const userQuery = { email: email };
 
+        // Update user
         const updateUser = {
           $set: {
             role: "rider",
+            workStatus: "available",
           },
         };
-        const userResult = await usersCollection.updateOne(
-          userQuery,
-          updateUser
-        );
+        const result = await usersCollection.updateOne(userQuery, updateUser);
       }
-
-      // if (status === 'rejected' || status === 'pending') {
-      //   const email = req.body.email;
-      //   const userQuery = { email: email }
-
-      //   const updateUser = {
-      //     $set: {
-      //       role: 'user'
-      //     }
-      //   }
-      //   const userResult = await usersCollection.updateOne(userQuery, updateUser);
-
-      // }
 
       res.send(result);
     });
@@ -224,15 +223,19 @@ const verifyAdmin = async(req, res, next) => {
     //   Parcel Api
     app.get("/parcels", verifyFBToken, async (req, res) => {
       const query = {};
-      const { email } = req.query;
+      const { email, deliveryStatus } = req.query;
       const decodedEmail = req.decoded_email;
 
-      if (email !== decodedEmail) {
-        return res.status(401).send({ message: "UnAuthorize Access" });
-      }
+      // if (email !== decodedEmail) {
+      //   return res.status(401).send({ message: "UnAuthorize Access" });
+      // }
 
       if (email) {
         query.senderEmail = email;
+      }
+
+      if (deliveryStatus) {
+        query.deliveryStatus = deliveryStatus;
       }
 
       const options = { sort: { created_At: -1 } };
@@ -252,6 +255,39 @@ const verifyAdmin = async(req, res, next) => {
       const newParcel = req.body;
       newParcel.created_At = new Date();
       const result = await parcelsCollection.insertOne(newParcel);
+      res.send(result);
+    });
+
+    app.patch("/parcels/:id", async (req, res) => {
+      const id = req.params.id;
+      const { riderId, riderName, riderEmail } = req.body;
+      const query = { _id: new ObjectId(id) };
+
+      // Parcel update
+      const updatedDoc = {
+        $set: {
+          riderId,
+          riderName,
+          riderEmail,
+          deliveryStatus: "rider-assigned",
+        },
+      };
+
+      const parcelResult = await parcelsCollection.updateOne(query, updatedDoc);
+
+      // Update work Info
+
+      const riderQuery = { _id: new ObjectId(riderId) };
+      const riderUpdateInfo = {
+        $set: {
+          workStatus: "on-delivery",
+        },
+      };
+      const result = await ridersCollection.updateOne(
+        riderQuery,
+        riderUpdateInfo
+      );
+
       res.send(result);
     });
 
@@ -328,6 +364,10 @@ const verifyAdmin = async(req, res, next) => {
       res.send({ url: session.url });
     });
 
+
+
+    
+
     // Validate Payment
     app.patch("/payment-success", async (req, res) => {
       const sessionId = req.query.session_id;
@@ -356,6 +396,7 @@ const verifyAdmin = async(req, res, next) => {
         const update = {
           $set: {
             paymentStatus: "paid",
+            deliveryStatus: "pending-pickup",
             trackingId: trackingId,
           },
         };
@@ -406,17 +447,13 @@ const verifyAdmin = async(req, res, next) => {
       res.send(result);
     });
 
-
-
-     // Payments Related Apis
+    // Payments Related Apis
     app.get("/all-payments", verifyFBToken, verifyAdmin, async (req, res) => {
-      console.log('in the all payments', req.decoded_email)
+      console.log("in the all payments", req.decoded_email);
       const cursor = paymentsCollection.find().sort({ paidAt: -1 });
       const result = await cursor.toArray();
       res.send(result);
     });
-
-
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
